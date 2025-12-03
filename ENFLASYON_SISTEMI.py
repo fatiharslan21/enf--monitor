@@ -21,14 +21,20 @@ except ImportError:
     winreg = None
 
 # --- 1. SAYFA AYARLARI ---
-st.set_page_config(page_title="VAKIFBANK AI", page_icon="🏦", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ENFLASYON MONITORU", page_icon="🏦", layout="wide", initial_sidebar_state="collapsed")
 
 # --- CSS SİHİRBAZLIĞI ---
 st.markdown("""
     <style>
-        /* Sidebar Gizle */
+        /* Sidebar ve Üst Bar Gizle (Share butonu dahil) */
         [data-testid="stSidebar"] {display: none;}
-        header {visibility: hidden;} .stDeployButton {display:none;} footer {visibility: hidden;} #MainMenu {visibility: hidden;}
+        [data-testid="stToolbar"] {visibility: hidden !important;} 
+        [data-testid="stHeader"] {visibility: hidden !important;}
+        header {visibility: hidden !important;} 
+        .stDeployButton {display:none !important;} 
+        footer {visibility: hidden;} 
+        #MainMenu {visibility: hidden;}
+
         .stApp {background-color: #F8F9FA; color: #212529;}
 
         /* Ticker */
@@ -71,6 +77,16 @@ st.markdown("""
         }
         .admin-header {
             font-size: 20px; font-weight: bold; color: #2C3E50; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px;
+        }
+
+        /* İmza Stili */
+        .signature {
+            text-align: center;
+            padding: 20px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-family: 'Segoe UI', sans-serif;
+            margin-top: 20px;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -209,20 +225,25 @@ def botu_calistir_core(status_callback=None):
                     if first.startswith("http"):
                         urls.append(first)
                         if any(m in first.lower() for m in MARKET_SELECTORLERI):
-                            sels.append(None); mans.append(None)
+                            sels.append(None);
+                            mans.append(None)
                         else:
                             pr = clean_p(content)
                             if pr > 0:
-                                mans.append(pr); sels.append(None)
+                                mans.append(pr);
+                                sels.append(None)
                             else:
-                                sels.append(content); mans.append(None)
+                                sels.append(content);
+                                mans.append(None)
                     else:
                         pr = clean_p(line)
                         urls.append(None);
                         sels.append(None);
                         mans.append(pr if pr > 0 else None)
                 else:
-                    urls.append(None); sels.append(None); mans.append(None)
+                    urls.append(None);
+                    sels.append(None);
+                    mans.append(None)
             df['URL'] = urls;
             df['CSS_Selector'] = sels;
             df['Manuel_Fiyat'] = mans
@@ -289,7 +310,7 @@ def botu_calistir_core(status_callback=None):
                             if "amazon" in domain:
                                 try:
                                     if "mevcut değil" in page.locator(
-                                        "#availability").inner_text().lower(): stok_yok = True
+                                            "#availability").inner_text().lower(): stok_yok = True
                                 except:
                                     pass
                             if not stok_yok:
@@ -441,21 +462,24 @@ def dashboard_modu():
                 for _, r in ticker_items.iterrows():
                     val = r['Fark']
                     if val == 0:
-                        color = "#6c757d"; text = f"▬ {r['Madde adı']} DEĞİŞİM YOK"
+                        color = "#6c757d";
+                        text = f"▬ {r['Madde adı']} DEĞİŞİM YOK"
                     elif val > 0:
-                        color = "#dc3545"; text = f"▲ {r['Madde adı']} %{val * 100:.1f}"
+                        color = "#dc3545";
+                        text = f"▲ {r['Madde adı']} %{val * 100:.1f}"
                     else:
-                        color = "#28a745"; text = f"▼ {r['Madde adı']} %{val * 100:.1f}"
+                        color = "#28a745";
+                        text = f"▼ {r['Madde adı']} %{val * 100:.1f}"
                     ticker_html += f"<span style='color:{color}'>{text}</span> &nbsp;&nbsp;&nbsp;&nbsp; "
 
                 st.markdown(
                     f"""<div class="ticker-wrap"><div class="ticker"><div class="ticker-item">CANLI PİYASA AKIŞI: &nbsp;&nbsp; {ticker_html}</div></div></div>""",
                     unsafe_allow_html=True)
 
-                st.title("🟡 VAKIFBANK AI ENFLASYON MONİTÖRÜ")
+                st.title("🟡 ENFLASYON MONİTÖRÜ")
 
                 # AI ASİSTANI
-                with st.expander("💬 VAKIFBANK AI - ASİSTAN", expanded=True):
+                with st.expander("💬 AI - ASİSTAN", expanded=True):
                     if "last_response" not in st.session_state: st.session_state.last_response = "Merhaba! Piyasa verilerini analiz etmek için buradayım."
                     st.info(st.session_state.last_response)
                     soru = st.text_input("Kategori/Ürün Sorgula:", key="user_input")
@@ -629,6 +653,9 @@ def dashboard_modu():
                                use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- İMZA ALANI ---
+    st.markdown('<div class="signature">Fatih Arslan Tarafından yapılmıştır</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
