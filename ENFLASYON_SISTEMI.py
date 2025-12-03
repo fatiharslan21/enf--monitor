@@ -191,18 +191,17 @@ def txt_dosyasini_excele_isle():
 
 
 # --- BOT MODU (FIREFOX ENTEGRASYONU - DÜZELTİLMİŞ) ---
+# --- BOT MODU (FIREFOX - HIZLANDIRILMIŞ VERSİYON) ---
 def botu_calistir_firefox(status_callback=None):
     import sys
 
-    # İŞLETİM SİSTEMİ KONTROLÜ
-    # Windows ise (Senin bilgisayarın) -> Headless = False (Tarayıcıyı gör)
-    # Linux ise (Streamlit Cloud) -> Headless = True (Tarayıcıyı gizle yoksa hata verir)
+    # Windows ise GÖRÜNÜR, Linux (Streamlit Cloud) ise GİZLİ çalış
     is_windows = os.name == 'nt'
     headless_mode = not is_windows
 
     if status_callback:
-        mode_text = "GÖRÜNÜR MOD (Windows)" if is_windows else "GİZLİ MOD (Sunucu)"
-        status_callback(f"Firefox Hazırlanıyor... Mod: {mode_text}")
+        mode_text = "GÖRÜNÜR MOD (PC)" if is_windows else "GİZLİ MOD (Sunucu)"
+        status_callback(f"Firefox Başlatılıyor... ({mode_text})")
 
     # 1. Gerekli Kurulumlar
     try:
@@ -222,43 +221,45 @@ def botu_calistir_firefox(status_callback=None):
         return "Excel Hatası"
 
     veriler = []
-    total = len(takip)
 
-    # Profil klasörü oluştur
     if not os.path.exists(PROFIL_KLASORU): os.makedirs(PROFIL_KLASORU)
 
-    if status_callback: status_callback(f"Hedef: {total} Ürün. Tarayıcı başlatılıyor...")
+    if status_callback: status_callback(f"Hedef: {len(takip)} Ürün. Hafıza yükleniyor...")
 
     with sync_playwright() as p:
-        # FIREFOX PERSISTENT CONTEXT
+        # Hafızalı Tarayıcıyı Aç
         browser = p.firefox.launch_persistent_context(
             user_data_dir=PROFIL_KLASORU,
-            headless=headless_mode,  # OTOMATİK AYARLANDI
+            headless=headless_mode,
             viewport={"width": 1366, "height": 768},
-            slow_mo=100 if is_windows else 0,  # Sunucuda hızlansın
+            # Windows'ta biraz bekleme payı koyuyoruz ki Cloudflare bizi insan sansın
+            # Ama sayfa yüklendiği an veriyi alıp geçeceğiz
+            slow_mo=50 if is_windows else 0,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
-            # Headless modda yakalanmamak için kimlik kartı
         )
 
         page = browser.pages[0] if browser.pages else browser.new_page()
-
-        # Webdriver izini sil (Bot koruması için kritik)
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         for i, row in takip.iterrows():
-            if status_callback: status_callback(f"İşleniyor: {str(row.get('Madde adı'))[:15]}...")
+            if status_callback: status_callback(
+                f"İşleniyor ({i + 1}/{len(takip)}): {str(row.get('Madde adı'))[:15]}...")
 
             fiyat = 0.0
             kaynak = ""
             url = row['URL']
 
-            # Manuel Kontrol
+            # Manuel Fiyat Varsa Direkt Geç
             if pd.notna(row.get('Manuel_Fiyat')) and float(row.get('Manuel_Fiyat') or 0) > 0:
                 fiyat = float(row['Manuel_Fiyat'])
                 kaynak = "Manuel"
+                veriler.append({"Tarih": datetime.now().strftime("%Y-%m-%d"), "Zaman": datetime.now().strftime("%H:%M"),
+                                "Kod": row.get('Kod'), "Madde_Adi": row.get('Madde adı'), "Fiyat": fiyat,
+                                "Kaynak": kaynak, "URL": url})
+                continue  # Döngünün başına dön
 
-            # Otomatik Çekim
-            elif pd.notna(url) and str(url).startswith("http"):
+            # Link Kontrolü
+            if pd.notna(url) and str(url).startswith("http"):
                 domain = urlparse(url).netloc.lower()
                 selectors = []
                 for m, s_list in MARKET_SELECTORLERI.items():
@@ -270,30 +271,40 @@ def botu_calistir_firefox(status_callback=None):
                 if selectors:
                     try:
                         # Sayfaya Git
-                        page.goto(url, timeout=60000, wait_until="domcontentloaded")  # Timeout artırıldı
+                        page.goto(url, timeout=60000, wait_until="domcontentloaded")
 
-                        # --- CİMRİ ÖZEL BOT KORUMASI ---
+                        # --- CİMRİ ÖZEL MANTIĞI (REVİZE EDİLDİ) ---
                         if "cimri" in domain:
-                            # Robot kutusu var mı kontrol et
+                            # 1. ADIM: HIZLI KONTROL (Fiyat zaten var mı?)
+                            # Eğer fiyat listesi görünüyorsa, robot kontrolünü TAMAMEN ATLA.
+                            fiyat_gorundu_mu = False
                             try:
-                                for _ in range(5):
-                                    if page.locator("div.rTdMX").first.is_visible(): break
-
-                                    # Cloudflare/Robot kutusu (Sadece Windows'ta tıklama yapabilir)
-                                    kutu = page.locator(".cb-lb").first
-                                    if kutu.is_visible() and is_windows:
-                                        time.sleep(random.uniform(1, 2))
-                                        kutu.hover()
-                                        time.sleep(0.5)
-                                        kutu.click()
-                                        time.sleep(3)
-                                    time.sleep(1)
+                                # Yarım saniye içinde fiyat görünüyor mu bak
+                                if page.locator("div.rTdMX").first.is_visible(timeout=500):
+                                    fiyat_gorundu_mu = True
                             except:
                                 pass
 
-                            # Fiyatı bul
+                            # Fiyat yoksa Robot Kontrolü Yap
+                            if not fiyat_gorundu_mu:
+                                try:
+                                    # Cloudflare kutusu var mı?
+                                    kutu = page.locator(".cb-lb").first
+                                    if kutu.is_visible(timeout=2000):  # 2 saniye bekle, yoksa geç
+                                        if is_windows:  # Sadece Windows'ta tıkla
+                                            time.sleep(random.uniform(0.5, 1.5))
+                                            kutu.hover()
+                                            time.sleep(0.2)
+                                            kutu.click()
+                                            # Tıkladıktan sonra fiyatın gelmesini bekle
+                                            page.wait_for_selector("div.rTdMX", timeout=5000)
+                                except:
+                                    pass
+
+                            # 2. ADIM: FİYATI ÇEK
                             try:
-                                page.wait_for_selector("div.rTdMX", timeout=5000)
+                                # Selector'ı bekle (En fazla 3 saniye)
+                                page.wait_for_selector("div.rTdMX", timeout=3000)
                                 elements = page.locator("div.rTdMX").all_inner_texts()
                                 prices = [p for p in [temizle_fiyat(e) for e in elements] if p]
                                 if prices:
@@ -301,11 +312,10 @@ def botu_calistir_firefox(status_callback=None):
                                     fiyat = sum(prices) / len(prices)
                                     kaynak = f"Cimri ({len(prices)})"
                             except:
-                                # Regex Yedek Plan
+                                # Regex (Son Çare)
                                 try:
-                                    body_text = page.locator("body").inner_text()
-                                    bulunanlar = re.findall(r'(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*(?:TL|₺)',
-                                                            body_text)
+                                    body = page.locator("body").inner_text()
+                                    bulunanlar = re.findall(r'(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*(?:TL|₺)', body)
                                     fiyatlar = [temizle_fiyat(h) for h in bulunanlar if temizle_fiyat(h)]
                                     if fiyatlar:
                                         fiyatlar.sort()
@@ -328,8 +338,10 @@ def botu_calistir_firefox(status_callback=None):
                             if not stok_yok:
                                 for sel in selectors:
                                     try:
+                                        # Amazon hariç diğerlerinde çok bekleme
+                                        to = 3000 if "amazon" in domain else 1000
                                         try:
-                                            page.wait_for_selector(sel, timeout=3000)
+                                            page.wait_for_selector(sel, timeout=to)
                                         except:
                                             pass
 
@@ -346,8 +358,9 @@ def botu_calistir_firefox(status_callback=None):
                                             if fiyat: break
                                     except:
                                         continue
+
                     except Exception as e:
-                        print(f"Hata ({domain}): {e}")
+                        print(f"Hata: {e}")
 
             if fiyat > 0:
                 veriler.append({
