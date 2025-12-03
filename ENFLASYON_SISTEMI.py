@@ -190,9 +190,19 @@ def txt_dosyasini_excele_isle():
         pass
 
 
-# --- BOT MODU (FIREFOX ENTEGRASYONU) ---
+# --- BOT MODU (FIREFOX ENTEGRASYONU - DÜZELTİLMİŞ) ---
 def botu_calistir_firefox(status_callback=None):
-    if status_callback: status_callback("Firefox Hazırlanıyor... (Gecko Engine)")
+    import sys
+
+    # İŞLETİM SİSTEMİ KONTROLÜ
+    # Windows ise (Senin bilgisayarın) -> Headless = False (Tarayıcıyı gör)
+    # Linux ise (Streamlit Cloud) -> Headless = True (Tarayıcıyı gizle yoksa hata verir)
+    is_windows = os.name == 'nt'
+    headless_mode = not is_windows
+
+    if status_callback:
+        mode_text = "GÖRÜNÜR MOD (Windows)" if is_windows else "GİZLİ MOD (Sunucu)"
+        status_callback(f"Firefox Hazırlanıyor... Mod: {mode_text}")
 
     # 1. Gerekli Kurulumlar
     try:
@@ -217,21 +227,22 @@ def botu_calistir_firefox(status_callback=None):
     # Profil klasörü oluştur
     if not os.path.exists(PROFIL_KLASORU): os.makedirs(PROFIL_KLASORU)
 
-    if status_callback: status_callback(f"Hedef: {total} Ürün. Tarayıcı açılıyor...")
+    if status_callback: status_callback(f"Hedef: {total} Ürün. Tarayıcı başlatılıyor...")
 
     with sync_playwright() as p:
         # FIREFOX PERSISTENT CONTEXT
-        # Headless=False yaparak bot tespiti zorlaştırıyoruz
         browser = p.firefox.launch_persistent_context(
             user_data_dir=PROFIL_KLASORU,
-            headless=False,  # Tarayıcıyı GÖREREK işlem yapacak (Daha güvenli)
-            viewport={"width": 1280, "height": 720},
-            slow_mo=100,  # İnsan hızı simülasyonu
+            headless=headless_mode,  # OTOMATİK AYARLANDI
+            viewport={"width": 1366, "height": 768},
+            slow_mo=100 if is_windows else 0,  # Sunucuda hızlansın
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+            # Headless modda yakalanmamak için kimlik kartı
         )
 
         page = browser.pages[0] if browser.pages else browser.new_page()
 
-        # Webdriver izini sil (Firefox için)
+        # Webdriver izini sil (Bot koruması için kritik)
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         for i, row in takip.iterrows():
@@ -259,18 +270,18 @@ def botu_calistir_firefox(status_callback=None):
                 if selectors:
                     try:
                         # Sayfaya Git
-                        page.goto(url, timeout=40000, wait_until="domcontentloaded")
+                        page.goto(url, timeout=60000, wait_until="domcontentloaded")  # Timeout artırıldı
 
                         # --- CİMRİ ÖZEL BOT KORUMASI ---
                         if "cimri" in domain:
                             # Robot kutusu var mı kontrol et
                             try:
                                 for _ in range(5):
-                                    if page.locator("div.rTdMX").first.is_visible(): break  # Fiyatlar geldi
+                                    if page.locator("div.rTdMX").first.is_visible(): break
 
-                                    # Cloudflare/Robot kutusu
+                                    # Cloudflare/Robot kutusu (Sadece Windows'ta tıklama yapabilir)
                                     kutu = page.locator(".cb-lb").first
-                                    if kutu.is_visible():
+                                    if kutu.is_visible() and is_windows:
                                         time.sleep(random.uniform(1, 2))
                                         kutu.hover()
                                         time.sleep(0.5)
@@ -317,9 +328,8 @@ def botu_calistir_firefox(status_callback=None):
                             if not stok_yok:
                                 for sel in selectors:
                                     try:
-                                        # Amazon bazen selector bekletir
                                         try:
-                                            page.wait_for_selector(sel, timeout=2000)
+                                            page.wait_for_selector(sel, timeout=3000)
                                         except:
                                             pass
 
