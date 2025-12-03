@@ -6,25 +6,25 @@ import re
 import winreg
 from urllib.parse import urlparse
 import time
+import shutil
 
 # --- AYARLAR ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TXT_DOSYASI = os.path.join(BASE_DIR, "URL VE CSS.txt")
 EXCEL_DOSYASI = os.path.join(BASE_DIR, "TUFE_Konfigurasyon.xlsx")
-CIKTI_DOSYASI = os.path.join(BASE_DIR, "Fiyat_Veritabani.xlsx")
+# Botun hafızasını kaydedeceği klasör (Bunu silme, çerezler burada birikir)
+PROFIL_KLASORU = os.path.join(BASE_DIR, "chrome_profil_data")
 SAYFA_ADI = "Madde_Sepeti"
-LOG_SAYFASI = "Fiyat_Log"
 
 # --- MARKET SEÇİCİLERİ ---
 MARKET_SELECTORLERI = {
-    "cimri": ["div.rTdMX", "div.sS0lR", ".offer-price"],
-    "migros": ["fe-product-price .subtitle-1", "fe-product-price .single-price-amount", "fe-product-price .amount",
-               "fe-product-price .sale-price", "fe-product-price .price"],
+    "cimri": ["div.rTdMX", ".offer-price", "div.sS0lR", ".min-price-val"],
+    "migros": ["fe-product-price .subtitle-1", "fe-product-price .single-price-amount", "fe-product-price .amount"],
     "carrefoursa": [".item-price", ".price"],
     "sokmarket": [".pricetag", ".price-box"],
     "a101": [".current-price", ".product-price"],
     "trendyol": [".prc-dsc", ".product-price-container"],
-    "hepsiburada": ["[data-test-id='price-current-price']", ".price"],
+    "hepsiburada": ["[data-test-id='price-current-price']", ".price", "div[data-test-id='price-container']"],
     "amazon": ["#corePrice_feature_div .a-price-whole", "#corePriceDisplay_desktop_feature_div .a-price-whole",
                "#priceblock_ourprice"],
     "getir": ["[data-testid='product-price']", "div[data-testid='text-price']"],
@@ -99,11 +99,9 @@ def txt_dosyasini_excele_isle():
                     else:
                         p = temizle_fiyat(content)
                         if p:
-                            manual_prices.append(p);
-                            selectors.append(None)
+                            manual_prices.append(p); selectors.append(None)
                         else:
-                            selectors.append(content);
-                            manual_prices.append(None)
+                            selectors.append(content); manual_prices.append(None)
                 else:
                     p = temizle_fiyat(line)
                     urls.append(None);
@@ -117,54 +115,16 @@ def txt_dosyasini_excele_isle():
         df['URL'] = urls;
         df['CSS_Selector'] = selectors;
         df['Manuel_Fiyat'] = manual_prices
-
-        # Dosya açıksa hata vermemesi için koruma
         try:
             with pd.ExcelWriter(EXCEL_DOSYASI, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                 df.to_excel(writer, sheet_name=SAYFA_ADI, index=False)
             return True
         except PermissionError:
-            print("⚠️ UYARI: TUFE_Konfigurasyon dosyası açık! Veriler güncellenemedi.")
+            print("⚠️ UYARI: Konfigürasyon dosyası açık! Devam ediliyor.")
             return True
     except Exception as e:
         print(f"Sync Hatası: {e}");
         return False
-
-
-def verileri_kaydet(yeni_veriler_df):
-    """
-    Excel'e kaydetme işlemini garantili yapan fonksiyon.
-    Eski yöntemdeki 'overlay' sorununu çözer.
-    """
-    print("\n💾 Kayıt işlemi başlatılıyor...")
-    try:
-        if os.path.exists(CIKTI_DOSYASI):
-            # Dosya varsa: Oku, birleştir, kaydet
-            try:
-                # Mevcut veriyi oku
-                eski_df = pd.read_excel(CIKTI_DOSYASI, sheet_name=LOG_SAYFASI)
-                # Yeni veriyi altına ekle (concat)
-                birlestirilmis_df = pd.concat([eski_df, yeni_veriler_df], ignore_index=True)
-            except ValueError:
-                # Sayfa yoksa veya dosya boşsa direkt yeniyi al
-                birlestirilmis_df = yeni_veriler_df
-
-            # Tüm veriyi tekrar yaz (Bu en temiz yöntemdir)
-            with pd.ExcelWriter(CIKTI_DOSYASI, engine='openpyxl', mode='w') as writer:
-                birlestirilmis_df.to_excel(writer, sheet_name=LOG_SAYFASI, index=False)
-        else:
-            # Dosya yoksa sıfırdan oluştur
-            with pd.ExcelWriter(CIKTI_DOSYASI, engine='openpyxl') as writer:
-                yeni_veriler_df.to_excel(writer, sheet_name=LOG_SAYFASI, index=False)
-
-        print(f"✅ Başarıyla kaydedildi. Toplam satır: {len(yeni_veriler_df)}")
-
-    except PermissionError:
-        yedek_isim = f"Fiyat_YEDEK_{datetime.now().strftime('%H%M%S')}.xlsx"
-        yeni_veriler_df.to_excel(os.path.join(BASE_DIR, yedek_isim), index=False)
-        print(f"❌ HATA: Ana dosya (Fiyat_Veritabani.xlsx) açık! Veriler '{yedek_isim}' adıyla yedeklendi.")
-    except Exception as e:
-        print(f"❌ Kayıt Hatası: {e}")
 
 
 def botu_calistir():
@@ -172,12 +132,15 @@ def botu_calistir():
     if not chrome_path: print("❌ HATA: Chrome bulunamadı."); return
 
     txt_dosyasini_excele_isle()
-    print(f"🚀 Bot Başlatılıyor...")
+    print(f"🚀 Bot Başlatılıyor... (ANTI-DETECT MOD)")
+
+    # Profil klasörü yoksa oluştur
+    if not os.path.exists(PROFIL_KLASORU):
+        os.makedirs(PROFIL_KLASORU)
 
     try:
         df = pd.read_excel(EXCEL_DOSYASI, sheet_name=SAYFA_ADI, dtype={'Kod': str})
         df['Kod'] = df['Kod'].apply(kod_standartlastir)
-        # Sadece URL veya Manuel Fiyatı olanları al
         mask = (df['URL'].notna()) | (df['Manuel_Fiyat'].notna())
         takip_listesi = df[mask].copy()
         print(f"📋 Hedef: {len(takip_listesi)} ürün taranacak.")
@@ -189,16 +152,29 @@ def botu_calistir():
     total = len(takip_listesi)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
+        # --- KRİTİK DEĞİŞİKLİK: launch_persistent_context ---
+        # Bu özellik tarayıcıyı her açtığında çerezleri ve geçmişi hatırlar.
+        # Böylece Cloudflare seni "sürekli gelen güvenilir kullanıcı" sanar.
+        browser = p.chromium.launch_persistent_context(
+            user_data_dir=PROFIL_KLASORU,  # Hafıza buraya kaydedilecek
             executable_path=chrome_path,
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"]
+            headless=False,
+            slow_mo=50,
+            # Bot tespitini engelleyen özel argümanlar
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--start-maximized",
+                "--no-sandbox",
+                "--disable-infobars"
+            ],
+            viewport={"width": 1920, "height": 1080}
         )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        context.route("**/*",
-                      lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
-        page = context.new_page()
+
+        page = browser.pages[0] if browser.pages else browser.new_page()
+
+        # --- GİZLİLİK TAKTİĞİ: webdriver özelliğini sil ---
+        # Sitelerin "Bu bir bot mu?" diye baktığı ilk değişkeni yok ediyoruz.
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         for i, (index, row) in enumerate(takip_listesi.iterrows()):
             urun_adi = str(row.get('Madde adı', '---'))[:20]
@@ -206,8 +182,9 @@ def botu_calistir():
 
             fiyat = None
             kaynak = ""
+            url = row['URL']
 
-            # 1. Manuel Kontrol
+            # 1. Manuel
             if pd.notna(row.get('Manuel_Fiyat')):
                 val = float(row['Manuel_Fiyat'])
                 if val > 0:
@@ -216,8 +193,7 @@ def botu_calistir():
                     print(f"✅ Manuel: {fiyat}")
 
             # 2. Web Scraping
-            elif pd.notna(row.get('URL')) and str(row['URL']).startswith("http"):
-                url = row['URL']
+            elif pd.notna(url) and str(url).startswith("http"):
                 domain = urlparse(url).netloc.lower()
                 selectors = []
                 for m, s_list in MARKET_SELECTORLERI.items():
@@ -226,64 +202,95 @@ def botu_calistir():
                     selectors = [str(row.get('CSS_Selector')).strip()]
                     kaynak = "Özel CSS"
 
-                if selectors:
-                    try:
-                        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-                        if "cimri" in domain:
+                try:
+                    page.goto(url, timeout=60000, wait_until="domcontentloaded")
+
+                    if "cimri" in domain:
+                        print("⏳ (Cimri Kontrolü...)", end=" ")
+
+                        # Otomatik Kutu Avcısı (15 sn)
+                        kutu_tiklandi = False
+                        for saniye in range(15):
+                            if page.locator("div.rTdMX").first.is_visible():
+                                break  # Fiyatlar zaten açıksa bekleme
+
+                            kutu = page.locator(".cb-lb").first
+                            if kutu.is_visible():
+                                print("🤖 Robot Kutusu Geçiliyor...", end=" ")
+                                kutu.hover()
+                                time.sleep(random.uniform(0.3, 0.7))  # Rastgele bekleme (İnsan gibi)
+                                page.mouse.down()
+                                time.sleep(random.uniform(0.1, 0.3))
+                                page.mouse.up()
+                                page.wait_for_timeout(3000)
+                                kutu_tiklandi = True
+                                break
+                            time.sleep(1)
+
+                        page.mouse.wheel(0, 500)
+
+                        # Fiyat Ara
+                        bulundu = False
+                        for sel in selectors:
                             try:
-                                page.wait_for_selector("div.rTdMX", timeout=4000)
-                                elements = page.locator("div.rTdMX").all_inner_texts()
-                                prices = [p for p in [temizle_fiyat(e) for e in elements] if p]
-                                if prices:
-                                    if len(prices) > 4: prices.sort(); prices = prices[1:-1]
-                                    fiyat = sum(prices) / len(prices)
-                                    kaynak = f"Cimri ({len(prices)})"
-                                    print(f"✅ Ort: {fiyat:.2f} TL")
+                                if page.locator(sel).count() > 0:
+                                    elements = page.locator(sel).all_inner_texts()
+                                    prices = [p for p in [temizle_fiyat(e) for e in elements] if p]
+                                    if prices:
+                                        if len(prices) > 4: prices.sort(); prices = prices[1:-1]
+                                        fiyat = sum(prices) / len(prices)
+                                        kaynak = f"Cimri ({len(prices)})"
+                                        print(f"✅ {fiyat:.2f} TL")
+                                        bulundu = True
+                                        break
                             except:
                                 pass
-                        else:
-                            stok_yok = False
-                            if "amazon" in domain:
-                                try:
-                                    av = page.locator("#availability").inner_text().lower()
-                                    if "mevcut değil" in av or "stokta yok" in av: stok_yok = True
-                                except:
-                                    pass
 
-                            if not stok_yok:
-                                for sel in selectors:
-                                    try:
-                                        page.wait_for_selector(sel, timeout=3000)
-                                        if "migros" in domain:
-                                            el = page.locator(sel).first
-                                            if el.count() > 0:
-                                                val = temizle_fiyat(el.inner_text())
-                                                if val: fiyat = val; break
-                                        elif "amazon" in domain:
-                                            el_text = page.locator(sel).first.inner_text()
-                                            val = temizle_fiyat(el_text)
-                                            if val: fiyat = val; break
-                                        else:
-                                            elements = page.locator(sel).all_inner_texts()
-                                            for el in elements:
-                                                val = temizle_fiyat(el)
-                                                if val: fiyat = val; break
-                                            if fiyat: break
-                                    except:
-                                        continue
+                        if not bulundu:
+                            # Regex
+                            body_text = page.locator("body").inner_text()
+                            bulunanlar = re.findall(r'(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*(?:TL|₺)', body_text)
+                            fiyatlar = []
+                            for ham in bulunanlar:
+                                temiz = temizle_fiyat(ham)
+                                if temiz: fiyatlar.append(temiz)
+                            if fiyatlar:
+                                fiyatlar.sort()
+                                mantikli = fiyatlar[:max(1, len(fiyatlar) // 2)]
+                                fiyat = sum(mantikli) / len(mantikli)
+                                kaynak = "Cimri (Regex)"
+                                print(f"✅ Regex: {fiyat:.2f} TL")
+                            else:
+                                print("⚠️ Bulunamadı")
 
-                                if fiyat:
-                                    print(f"✅ {fiyat} TL")
-                                elif stok_yok:
-                                    print("⚠️ Stok Yok")
+                    elif selectors:
+                        # Diğer marketler (Hızlandırılmış)
+                        time.sleep(1)
+                        for sel in selectors:
+                            try:
+                                if "migros" in domain:
+                                    el = page.locator(sel).first
+                                    if el.count() > 0:
+                                        val = temizle_fiyat(el.inner_text())
+                                        if val: fiyat = val; break
                                 else:
-                                    print("⚠️ Fiyat Bulunamadı")
-                    except:
-                        print("❌ Bağlantı Hatası")
-                else:
-                    print("⏭️ Şablon Yok")
+                                    elements = page.locator(sel).all_inner_texts()
+                                    for el in elements:
+                                        val = temizle_fiyat(el)
+                                        if val: fiyat = val; break
+                                    if fiyat: break
+                            except:
+                                continue
+                        if fiyat:
+                            print(f"✅ {fiyat} TL")
+                        else:
+                            print("⚠️ Bulunamadı")
+                    else:
+                        print("⏭️ Şablon Yok")
+                except Exception as e:
+                    print(f"❌ Hata: {e}")
             else:
-                print("⚪")
+                print("⚪ URL Yok")
 
             veriler.append({
                 "Tarih": datetime.now().strftime("%Y-%m-%d"),
@@ -293,11 +300,21 @@ def botu_calistir():
                 "Kaynak": kaynak,
                 "URL": row.get('URL')
             })
+
+        # Tarayıcıyı kapatmıyoruz ki hafıza silinmesin, sadece script biter.
         browser.close()
 
     if veriler:
-        df_yeni = pd.DataFrame(veriler)
-        verileri_kaydet(df_yeni)
+        print("\n💾 Dosya oluşturuluyor...")
+        zaman_damgasi = datetime.now().strftime("%d_%m_%Y__%H_%M_%S")
+        yeni_dosya_adi = f"Fiyatlar_{zaman_damgasi}.xlsx"
+        tam_yol = os.path.join(BASE_DIR, yeni_dosya_adi)
+        try:
+            df_yeni = pd.DataFrame(veriler)
+            df_yeni.to_excel(tam_yol, index=False)
+            print(f"✅ DOSYA HAZIR: {yeni_dosya_adi}")
+        except Exception as e:
+            print(f"❌ Kayıt Hatası: {e}")
 
 
 if __name__ == "__main__":

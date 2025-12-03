@@ -6,15 +6,15 @@ from playwright.sync_api import sync_playwright
 import os
 import re
 from urllib.parse import urlparse
-from datetime import datetime, date
+from datetime import datetime
 import time
 import sys
 import subprocess
 import numpy as np
-import io
+import random
 import shutil
 
-# --- PLATFORM KONTROLÜ ---
+# --- PLATFORM KONTROLÜ (LINUX/WINDOWS UYUMU) ---
 try:
     import winreg
 except ImportError:
@@ -26,7 +26,7 @@ st.set_page_config(page_title="ENFLASYON MONITORU", page_icon="🏦", layout="wi
 # --- CSS SİHİRBAZLIĞI ---
 st.markdown("""
     <style>
-        /* Sidebar ve Üst Bar Gizle (Share butonu dahil) */
+        /* Sidebar ve Üst Bar Gizle */
         [data-testid="stSidebar"] {display: none;}
         [data-testid="stToolbar"] {visibility: hidden !important;} 
         [data-testid="stHeader"] {visibility: hidden !important;}
@@ -54,20 +54,6 @@ st.markdown("""
         }
         div[data-testid="metric-container"]:hover {
             transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.08); border-color: #ebc71d;
-        }
-        div[data-testid="stMetricLabel"] { color: #6C757D; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; }
-        div[data-testid="stMetricValue"] { color: #2C3E50; font-family: 'Arial', sans-serif; font-weight: 700; }
-
-        /* AI Kutusu */
-        .ai-box {
-            background: #FFFFFF; border-left: 5px solid #ebc71d; padding: 20px;
-            border-radius: 8px; margin: 20px 0; font-family: 'Segoe UI', sans-serif;
-            color: #495057; box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        }
-
-        /* Tablolar */
-        div[data-testid="stDataFrame"] {
-            background-color: #FFFFFF; border: 1px solid #EAEDF0; border-radius: 10px; padding: 5px;
         }
 
         /* Alt Panel */
@@ -97,6 +83,25 @@ TXT_DOSYASI = "URL VE CSS.txt"
 EXCEL_DOSYASI = "TUFE_Konfigurasyon.xlsx"
 FIYAT_DOSYASI = "Fiyat_Veritabani.xlsx"
 SAYFA_ADI = "Madde_Sepeti"
+
+# --- MARKET SEÇİCİLERİ (GÜNCELLENMİŞ) ---
+MARKET_SELECTORLERI = {
+    "cimri": ["div.rTdMX", ".offer-price", "div.sS0lR", ".min-price-val"],
+    "migros": ["fe-product-price .subtitle-1", "fe-product-price .single-price-amount", "fe-product-price .amount"],
+    "carrefoursa": [".item-price", ".price"],
+    "sokmarket": [".pricetag", ".price-box"],
+    "a101": [".current-price", ".product-price"],
+    "trendyol": [".prc-dsc", ".product-price-container"],
+    "hepsiburada": ["[data-test-id='price-current-price']", ".price", "div[data-test-id='price-container']"],
+    "amazon": ["#corePrice_feature_div .a-price-whole", "#corePriceDisplay_desktop_feature_div .a-price-whole",
+               "#priceblock_ourprice"],
+    "getir": ["[data-testid='product-price']", "div[data-testid='text-price']"],
+    "yemeksepeti": [".product-price"],
+    "bim": [".product-price"],
+    "koctas": [".price-new"],
+    "teknosa": [".prc-first"],
+    "mediamarkt": [".price"]
+}
 
 
 # --- 3. YARDIMCI FONKSİYONLAR ---
@@ -135,27 +140,6 @@ def sistemi_sifirla():
     return False
 
 
-# --- BOT MODU ---
-MARKET_SELECTORLERI = {
-    "migros": [".single-price-amount", "fe-product-price .subtitle-1", "fe-product-price .amount",
-               "fe-product-price .price", "#price-value", ".sm-product-price"],
-    "carrefoursa": [".item-price", ".price"],
-    "sokmarket": [".pricetag", ".price-box"],
-    "a101": [".current-price", ".product-price"],
-    "trendyol": [".prc-dsc", ".product-price-container"],
-    "hepsiburada": ["[data-test-id='price-current-price']", ".price"],
-    "amazon": ["#corePrice_feature_div .a-price-whole", "#corePriceDisplay_desktop_feature_div .a-price-whole",
-               "#priceblock_ourprice"],
-    "getir": ["[data-testid='product-price']", "div[data-testid='text-price']"],
-    "yemeksepeti": [".product-price"],
-    "bim": [".product-price"],
-    "koctas": [".price-new"],
-    "teknosa": [".prc-first"],
-    "mediamarkt": [".price"],
-    "cimri": ["div.rTdMX", "div.sS0lR", ".offer-price"]
-}
-
-
 def temizle_fiyat(text):
     if not text: return None
     text = str(text)
@@ -168,7 +152,7 @@ def temizle_fiyat(text):
     text = re.sub(r'[^\d.]', '', text)
     try:
         val = float(text)
-        return val if val > 0 else None
+        return val if val > 0.5 else None
     except:
         return None
 
@@ -180,29 +164,17 @@ def kod_standartlastir(kod):
         return "0000000"
 
 
+# --- BOT MOTORU (FIREFOX ENTEGRASYONLU) ---
 def botu_calistir_core(status_callback=None):
-    if status_callback: status_callback("Motor Isınıyor...")
-    chrome_path = None
-    if os.name == 'nt' and winreg:
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                 r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe")
-            path, _ = winreg.QueryValueEx(key, "")
-            if os.path.exists(path): chrome_path = path
-        except:
-            pass
-        if not chrome_path:
-            yollar = [r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                      r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"]
-            for y in yollar:
-                if os.path.exists(y): chrome_path = y; break
-    else:
-        try:
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
-            subprocess.run([sys.executable, "-m", "playwright", "install-deps"], check=False)
-        except:
-            pass
+    if status_callback: status_callback("🔧 Bot Hazırlanıyor (Firefox Mode)...")
 
+    # Playwright Kurulum Kontrolü (Streamlit Cloud için önemli)
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "firefox"], check=False)
+    except:
+        pass
+
+    # TXT Dosyasını Excel'e Senkronize Et
     if os.path.exists(TXT_DOSYASI) and os.path.exists(EXCEL_DOSYASI):
         try:
             with open(TXT_DOSYASI, 'r', encoding='utf-8') as f:
@@ -210,17 +182,11 @@ def botu_calistir_core(status_callback=None):
             df = pd.read_excel(EXCEL_DOSYASI, sheet_name=SAYFA_ADI, dtype={'Kod': str})
             urls, sels, mans = [], [], []
 
-            def clean_p(t):
-                try:
-                    return float(re.sub(r'[^\d.]', '', str(t).replace('TL', '').replace('.', '').replace(',', '.')))
-                except:
-                    return 0
-
             for i in range(len(df)):
                 if i < len(lines):
-                    line = lines[i];
-                    p = line.split(None, 1);
-                    first = p[0];
+                    line = lines[i]
+                    p = line.split(None, 1)
+                    first = p[0]
                     content = p[1] if len(p) > 1 else ""
                     if first.startswith("http"):
                         urls.append(first)
@@ -228,18 +194,16 @@ def botu_calistir_core(status_callback=None):
                             sels.append(None);
                             mans.append(None)
                         else:
-                            pr = clean_p(content)
-                            if pr > 0:
-                                mans.append(pr);
-                                sels.append(None)
+                            pr = temizle_fiyat(content)
+                            if pr:
+                                mans.append(pr); sels.append(None)
                             else:
-                                sels.append(content);
-                                mans.append(None)
+                                sels.append(content); mans.append(None)
                     else:
-                        pr = clean_p(line)
+                        pr = temizle_fiyat(line)
                         urls.append(None);
                         sels.append(None);
-                        mans.append(pr if pr > 0 else None)
+                        mans.append(pr)
                 else:
                     urls.append(None);
                     sels.append(None);
@@ -249,129 +213,170 @@ def botu_calistir_core(status_callback=None):
             df['Manuel_Fiyat'] = mans
             with pd.ExcelWriter(EXCEL_DOSYASI, engine='openpyxl', mode='a', if_sheet_exists='replace') as w:
                 df.to_excel(w, sheet_name=SAYFA_ADI, index=False)
-        except:
-            pass
+        except Exception as e:
+            if status_callback: status_callback(f"Excel Sync Hatası: {e}")
 
+    # Veriyi Oku
     try:
         df = pd.read_excel(EXCEL_DOSYASI, sheet_name=SAYFA_ADI, dtype={'Kod': str})
         df['Kod'] = df['Kod'].astype(str).apply(kod_standartlastir)
         mask = (df['URL'].notna()) | (df['Manuel_Fiyat'].notna() & (df['Manuel_Fiyat'] > 0))
         takip = df[mask].copy()
     except:
-        return "Excel Hatası"
+        return "Excel Okuma Hatası"
 
     veriler = []
     total = len(takip)
-    if status_callback: status_callback(f"Hedef: {total} Ürün (Veri Toplanıyor)...")
+    if status_callback: status_callback(f"🚀 Hedef: {total} Ürün (Taranıyor)...")
 
+    # --- FIREFOX İLE SCRAPING ---
     with sync_playwright() as p:
-        if chrome_path and os.name == 'nt':
-            browser = p.chromium.launch(executable_path=chrome_path, headless=True,
-                                        args=["--disable-blink-features=AutomationControlled"])
-        else:
-            browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+        # Streamlit Cloud'da Headless=True olmalı. Firefox tespit edilmesi daha zordur.
+        browser = p.firefox.launch(headless=True)
 
-        context = browser.new_context()
-        context.route("**/*",
-                      lambda r: r.abort() if r.request.resource_type in ["image", "media", "font"] else r.continue_())
+        # Kullanıcı ajanı sahtekarlığı (Cloudflare için)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+        )
+
+        # Webdriver özelliğini gizle (JS Enjeksiyonu)
         page = context.new_page()
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         for i, row in takip.iterrows():
-            fiyat = 0.0;
+            fiyat = 0.0
             kaynak = ""
+
+            # 1. Manuel
             if pd.notna(row.get('Manuel_Fiyat')) and row.get('Manuel_Fiyat') > 0:
-                fiyat = float(row['Manuel_Fiyat']);
+                fiyat = float(row['Manuel_Fiyat'])
                 kaynak = "Manuel"
+
+            # 2. Otomatik
             elif pd.notna(row.get('URL')) and str(row['URL']).startswith("http"):
-                url = row['URL'];
-                domain = urlparse(url).netloc.lower();
+                url = row['URL']
+                domain = urlparse(url).netloc.lower()
                 selectors = []
                 for m, s_list in MARKET_SELECTORLERI.items():
                     if m in domain: selectors = s_list; kaynak = f"Otomatik ({m})"; break
-                if not selectors and pd.notna(row.get('CSS_Selector')): selectors = [
-                    str(row.get('CSS_Selector')).strip()]; kaynak = "Özel CSS"
+                if not selectors and pd.notna(row.get('CSS_Selector')):
+                    selectors = [str(row.get('CSS_Selector')).strip()]
+                    kaynak = "Özel CSS"
 
                 if selectors:
                     try:
-                        page.goto(url, timeout=20000, wait_until="domcontentloaded")
+                        # Sayfaya Git
+                        page.goto(url, timeout=45000, wait_until="domcontentloaded")
+
+                        # --- CIMRI ÖZEL MANTIK ---
                         if "cimri" in domain:
                             try:
-                                page.wait_for_selector("div.rTdMX", timeout=4000)
+                                # Kutu tıklama simülasyonu
+                                try:
+                                    kutu = page.locator(".cb-lb").first
+                                    if kutu.is_visible(timeout=3000):
+                                        kutu.click(force=True)  # Headless modda mouse hover zor, click force
+                                        time.sleep(2)
+                                except:
+                                    pass
+
+                                # Fiyatları Topla
+                                page.wait_for_selector("div.rTdMX", timeout=5000)
                                 elements = page.locator("div.rTdMX").all_inner_texts()
                                 prices = [p for p in [temizle_fiyat(e) for e in elements] if p]
                                 if prices:
                                     if len(prices) > 4: prices.sort(); prices = prices[1:-1]
-                                    fiyat = sum(prices) / len(prices);
+                                    fiyat = sum(prices) / len(prices)
                                     kaynak = f"Cimri ({len(prices)})"
                             except:
-                                pass
+                                # Regex Yedek Planı
+                                try:
+                                    body_txt = page.locator("body").inner_text()
+                                    bulunanlar = re.findall(r'(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*(?:TL|₺)',
+                                                            body_txt)
+                                    f_list = [temizle_fiyat(x) for x in bulunanlar if temizle_fiyat(x)]
+                                    if f_list:
+                                        fiyat = min(f_list)  # En düşük fiyat mantıklı olabilir
+                                        kaynak = "Cimri (Regex)"
+                                except:
+                                    pass
+
+                        # --- GENEL MARKET MANTIĞI ---
                         else:
                             stok_yok = False
                             if "amazon" in domain:
                                 try:
                                     if "mevcut değil" in page.locator(
-                                            "#availability").inner_text().lower(): stok_yok = True
+                                        "#availability").inner_text().lower(): stok_yok = True
                                 except:
                                     pass
+
                             if not stok_yok:
                                 for sel in selectors:
                                     try:
-                                        page.wait_for_selector(sel, timeout=3000)
-                                        if "migros" in domain:
-                                            el = page.locator(sel).first
-                                            if el.count() > 0:
+                                        if page.locator(sel).count() > 0:
+                                            # Migros özel
+                                            if "migros" in domain:
+                                                el = page.locator(sel).first
                                                 val = temizle_fiyat(el.inner_text())
                                                 if val: fiyat = val; break
-                                        elif "amazon" in domain:
-                                            el_text = page.locator(sel).first.inner_text()
-                                            val = temizle_fiyat(el_text)
-                                            if val: fiyat = val; break
-                                        else:
-                                            elements = page.locator(sel).all_inner_texts()
-                                            for el in elements:
-                                                val = temizle_fiyat(el)
-                                                if val: fiyat = val; break
+                                            # Genel
+                                            else:
+                                                elements = page.locator(sel).all_inner_texts()
+                                                for el in elements:
+                                                    val = temizle_fiyat(el)
+                                                    if val: fiyat = val; break
                                             if fiyat: break
                                     except:
                                         continue
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"Hata URL: {url} -> {e}")
 
-            veriler.append({
-                "Tarih": datetime.now().strftime("%Y-%m-%d"), "Zaman": datetime.now().strftime("%H:%M"),
-                "Kod": row.get('Kod'), "Madde_Adi": row.get('Madde adı'), "Fiyat": fiyat if fiyat > 0 else None,
-                "Kaynak": kaynak, "URL": row.get('URL')
-            })
+            if fiyat and fiyat > 0:
+                veriler.append({
+                    "Tarih": datetime.now().strftime("%Y-%m-%d"),
+                    "Zaman": datetime.now().strftime("%H:%M"),
+                    "Kod": row.get('Kod'),
+                    "Madde_Adi": row.get('Madde adı'),
+                    "Fiyat": fiyat,
+                    "Kaynak": kaynak,
+                    "URL": row.get('URL')
+                })
+
+            # İnsan taklidi için minik bekleme
+            time.sleep(random.uniform(0.5, 1.5))
+
         browser.close()
 
     if veriler:
         df_new = pd.DataFrame(veriler)
         try:
+            # APPEND MODE (Mevcut dosyanın altına ekle)
             if not os.path.exists(FIYAT_DOSYASI):
                 with pd.ExcelWriter(FIYAT_DOSYASI, engine='openpyxl') as writer:
-                    df_yeni.to_excel(writer, sheet_name='Fiyat_Log', index=False)
+                    df_new.to_excel(writer, sheet_name='Fiyat_Log', index=False)
             else:
                 with pd.ExcelWriter(FIYAT_DOSYASI, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
                     try:
-                        start = w.sheets['Fiyat_Log'].max_row
+                        # Son satırı bul
+                        if 'Fiyat_Log' in writer.book.sheetnames:
+                            start_row = writer.book['Fiyat_Log'].max_row
+                        else:
+                            start_row = 0
+                        df_new.to_excel(writer, sheet_name='Fiyat_Log', index=False, header=False, startrow=start_row)
                     except:
-                        start = 0
-                    df_new.to_excel(w, sheet_name='Fiyat_Log', index=False, header=False, startrow=start)
-        except:
-            pass
-        return "OK"
-    return "Veri Yok"
+                        # Yedek plan
+                        df_new.to_excel(writer, sheet_name='Fiyat_Log', index=False)
+            return f"{len(veriler)} Veri Eklendi"
+        except Exception as e:
+            return f"Kaydetme Hatası: {e}"
+
+    return "Veri Bulunamadı"
 
 
 # --- DASHBOARD MODU ---
 def dashboard_modu():
     python_exe = get_local_python()
-
-    def kod_standartlastir(kod):
-        try:
-            return str(kod).replace('.0', '').strip().zfill(7)
-        except:
-            return "0000000"
 
     def veri_yukle():
         if not os.path.exists(FIYAT_DOSYASI): return None, None
@@ -478,38 +483,6 @@ def dashboard_modu():
 
                 st.title("🟡 ENFLASYON MONİTÖRÜ")
 
-                # AI ASİSTANI
-                with st.expander("💬 AI - ASİSTAN", expanded=True):
-                    if "last_response" not in st.session_state: st.session_state.last_response = "Merhaba! Piyasa verilerini analiz etmek için buradayım."
-                    st.info(st.session_state.last_response)
-                    soru = st.text_input("Kategori/Ürün Sorgula:", key="user_input")
-                    if soru:
-                        soru = soru.lower();
-                        cevap = ""
-                        if "artan" in soru:
-                            top = df_analiz.sort_values('Fark', ascending=False).head(3)
-                            cevap = "📈 **En Çok Artanlar:** " + ", ".join(
-                                [f"{r['Madde adı']} (%{r['Fark'] * 100:.1f})" for _, r in top.iterrows()])
-                        elif "düşen" in soru:
-                            top = df_analiz.sort_values('Fark', ascending=True).head(3)
-                            cevap = "📉 **En Çok Düşenler:** " + ", ".join(
-                                [f"{r['Madde adı']} (%{r['Fark'] * 100:.1f})" for _, r in top.iterrows()])
-                        elif "enflasyon" in soru:
-                            cevap = f"📊 **Genel Durum:** Kümülatif enflasyon %{toplam_deg:.2f}."
-                        else:
-                            mask = np.ones(len(df_analiz), dtype=bool)
-                            for k in soru.split(): mask &= df_analiz['Madde adı'].astype(str).str.contains(k,
-                                                                                                           case=False,
-                                                                                                           na=False)
-                            bulunan = df_analiz[mask]
-                            if not bulunan.empty:
-                                row = bulunan.iloc[0]
-                                cevap = f"🏷️ **{row['Emoji']} {row['Madde adı']}:** Güncel Fiyat {row[son_gun]:.2f} TL, Değişim %{row['Fark'] * 100:.1f}"
-                            else:
-                                cevap = "🤖 Veri yok."
-                        st.session_state.last_response = cevap;
-                        st.rerun()
-
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("ENDEKS", f"{son_tufe:.2f}", "Baz: 100")
                 c2.metric("ENFLASYON (KÜMÜLATİF)", f"%{toplam_deg:.2f}", f"{aylik_deg:.2f}% (Günlük)",
@@ -571,32 +544,22 @@ def dashboard_modu():
                                                 son_gun_str: st.column_config.NumberColumn("Fiyat (TL)",
                                                                                            format="%.2f ₺")},
                                  hide_index=True, use_container_width=True, height=600)
-
-                # --- SİMÜLASYON (GRID YAPI) ---
                 with tab4:
                     st.subheader("🔮 Gelecek Simülasyonu")
-                    st.info("Kutucuklara beklediğiniz % zam/indirim oranını girin. (Boş = 0 kabul edilir)")
-
                     gruplar = sorted(df_analiz['Grup'].unique())
                     cols = st.columns(4)
-
                     sim_inputs = {}
                     for i, grp in enumerate(gruplar):
                         with cols[i % 4]:
                             sim_inputs[grp] = st.number_input(f"{grp} (%)", min_value=-100.0, max_value=100.0,
                                                               value=0.0, step=1.0)
-
-                    # Hesaplama
                     tahmini_artis_toplam = 0
                     toplam_agirlik = df_analiz['Agirlik_2025'].sum()
-
                     for grp, artis in sim_inputs.items():
                         grp_agirlik = df_analiz[df_analiz['Grup'] == grp]['Agirlik_2025'].sum()
                         etki = (grp_agirlik / toplam_agirlik) * artis
                         tahmini_artis_toplam += etki
-
                     yeni_enf = toplam_deg + tahmini_artis_toplam
-
                     st.divider()
                     c_sim_res1, c_sim_res2 = st.columns(2)
                     c_sim_res1.metric("Mevcut Enflasyon", f"%{toplam_deg:.2f}")
@@ -612,14 +575,10 @@ def dashboard_modu():
         st.markdown("**📂 Excel'den Yükle**")
         uf = st.file_uploader("Fiyat_Veritabani.xlsx", type=['xlsx'], label_visibility="collapsed")
         if uf:
-            # YENİ KOD: Sadece yüklenen dosya değil, sayfaların varlığı kontrol ediliyor.
             try:
-                # Excel'i oku (Sheet adı önemli değil, sadece dosya olarak al)
                 xls = pd.ExcelFile(uf)
-                # Eğer Fiyat_Log varsa onu al, yoksa ilk sayfayı al (Esneklik)
                 sheet = "Fiyat_Log" if "Fiyat_Log" in xls.sheet_names else xls.sheet_names[0]
                 df_temp = pd.read_excel(uf, sheet_name=sheet)
-
                 with pd.ExcelWriter(FIYAT_DOSYASI, engine='openpyxl') as writer:
                     df_temp.to_excel(writer, sheet_name='Fiyat_Log', index=False)
                 st.success("Veriler Güncellendi!")
@@ -629,14 +588,18 @@ def dashboard_modu():
                 st.error(f"Dosya hatası: {e}")
 
     with c_bot:
-        st.markdown("**🚀 Botu Çalıştır**")
-        if st.button("Verileri Çek (Local)", type="primary", use_container_width=True):
-            try:
-                subprocess.run([python_exe, __file__, "--bot-modu"], cwd=BASE_DIR)
-                st.success("Bitti!");
-                st.rerun()
-            except:
-                st.error("Hata")
+        st.markdown("**🚀 Botu Çalıştır (Firefox)**")
+        # Streamlit içinde butonla tetiklenen fonksiyon
+        if st.button("Verileri Çek", type="primary", use_container_width=True):
+            with st.spinner("Firefox Başlatılıyor..."):
+                status_placeholder = st.empty()
+                sonuc = botu_calistir_core(lambda msg: status_placeholder.info(msg))
+                if "Hata" not in sonuc:
+                    status_placeholder.success(f"İşlem Tamam! {sonuc}")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    status_placeholder.error(sonuc)
 
     with c_reset:
         st.markdown("**⚠️ Sıfırla**")
@@ -651,15 +614,13 @@ def dashboard_modu():
             st.download_button("📊 Raporu İndir", f, file_name="Enflasyon_Rapor.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True)
-
     st.markdown('</div>', unsafe_allow_html=True)
-
-    # --- İMZA ALANI ---
     st.markdown('<div class="signature">Fatih Arslan Tarafından yapılmıştır</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--bot-modu":
-        botu_calistir_core()
+        # Komut satırından çalıştırma (Opsiyonel)
+        print(botu_calistir_core())
     else:
         dashboard_modu()

@@ -1,3 +1,1 @@
-chromium
-libnss3
-libasound2
+firefox-esr
